@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>IMU Point Controller — ZUPT Prototype</title>
+<style>
+  :root{
+    --ink:#0b0e14;
+    --panel:#131a24;
+    --panel2:#0f151e;
+    --line:#22304200;
+    --text:#e8edf5;
+    --dim:#7d8ba1;
+    --track:#ffa02e;   /* amber = integrating */
+    --lock:#8fd3ff;    /* ice  = ZUPT locked  */
+    --warn:#ff5d5d;
+    --mono:"SF Mono","Roboto Mono",ui-monospace,Menlo,Consolas,monospace;
+    --sans:-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%;overflow:hidden;background:var(--ink);color:var(--text);font-family:var(--sans);
+    -webkit-user-select:none;user-select:none;touch-action:none}
+  #scene{position:fixed;inset:0}
+
+  /* ---------- top HUD ---------- */
+  #hud{position:fixed;top:0;left:0;right:0;display:flex;align-items:stretch;gap:1px;
+    padding:calc(env(safe-area-inset-top) + 8px) 10px 0 10px;pointer-events:none;z-index:5}
+  .cell{background:color-mix(in srgb,var(--panel) 82%,transparent);backdrop-filter:blur(6px);
+    padding:7px 10px;font-family:var(--mono);font-size:11px;line-height:1.35;
+    border:1px solid #223042;border-right:none}
+  .cell:first-child{border-radius:8px 0 0 8px}
+  .cell:last-child{border-radius:0 8px 8px 0;border-right:1px solid #223042}
+  .cell .k{display:block;font-size:8.5px;letter-spacing:.14em;color:var(--dim);text-transform:uppercase}
+  #stateCell{min-width:84px;text-align:center;font-weight:700;letter-spacing:.1em;font-size:13px;
+    display:flex;flex-direction:column;justify-content:center}
+  .st-lock{color:var(--lock)} .st-track{color:var(--track)}
+  #stateCell.tracking{animation:pulse .6s ease-in-out infinite alternate}
+  @keyframes pulse{from{background:color-mix(in srgb,var(--panel) 82%,transparent)}
+                   to{background:color-mix(in srgb,#3a2a10 82%,transparent)}}
+  .grow{flex:1}
+
+  /* ---------- bottom drawer ---------- */
+  #drawer{position:fixed;left:0;right:0;bottom:0;z-index:6;
+    background:color-mix(in srgb,var(--panel2) 90%,transparent);backdrop-filter:blur(10px);
+    border-top:1px solid #223042;padding:10px 14px calc(env(safe-area-inset-bottom) + 10px) 14px;
+    transform:translateY(calc(100% - 44px));transition:transform .25s ease}
+  #drawer.open{transform:translateY(0)}
+  #drawerTab{display:flex;justify-content:space-between;align-items:center;height:24px;
+    font-family:var(--mono);font-size:10px;letter-spacing:.16em;color:var(--dim);
+    text-transform:uppercase;cursor:pointer;padding-bottom:10px}
+  #drawerTab::after{content:"▲";font-size:9px}
+  #drawer.open #drawerTab::after{content:"▼"}
+  .row{display:flex;align-items:center;gap:10px;margin:9px 0;font-family:var(--mono);font-size:11px}
+  .row label{width:86px;color:var(--dim);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+  .row output{width:52px;text-align:right;color:var(--text)}
+  input[type=range]{flex:1;appearance:none;-webkit-appearance:none;height:26px;background:transparent}
+  input[type=range]::-webkit-slider-runnable-track{height:3px;background:#2a3a50;border-radius:2px}
+  input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;margin-top:-9.5px;
+    border-radius:50%;background:var(--text);border:3px solid var(--ink)}
+  .btnrow{display:flex;gap:8px;margin-top:12px}
+  button{flex:1;font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;
+    background:#1b2635;color:var(--text);border:1px solid #2c3d55;border-radius:8px;padding:11px 6px}
+  button:active{background:#2c3d55}
+  .toggle{display:flex;align-items:center;justify-content:space-between;margin:9px 0;
+    font-family:var(--mono);font-size:11px}
+  .toggle .lbl{color:var(--dim);font-size:10px;letter-spacing:.08em;text-transform:uppercase}
+  .sw{width:44px;height:24px;border-radius:12px;background:#22304a;position:relative;transition:background .15s}
+  .sw::after{content:"";position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;
+    background:#7d8ba1;transition:all .15s}
+  .sw.on{background:#274b63}.sw.on::after{left:23px;background:var(--lock)}
+  .sw.dis{opacity:.35}
+  #magNote{font-size:9px;color:var(--dim);font-family:var(--mono);margin-top:-4px}
+
+  /* ---------- start overlay ---------- */
+  #overlay{position:fixed;inset:0;z-index:20;background:var(--ink);display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:18px;padding:32px;text-align:center}
+  #overlay h1{font-family:var(--mono);font-size:15px;letter-spacing:.22em;font-weight:600}
+  #overlay h1 span{color:var(--track)}
+  #overlay p{color:var(--dim);font-size:13px;line-height:1.6;max-width:340px}
+  #startBtn{flex:none;width:min(320px,80vw);padding:16px;font-size:13px;background:#233650;
+    border-color:#3a557a;border-radius:12px}
+  #err{color:var(--warn);font-family:var(--mono);font-size:11px;max-width:340px;line-height:1.5}
+  @media (prefers-reduced-motion: reduce){#stateCell.tracking{animation:none}}
+</style>
+</head>
+<body>
+
+<div id="scene"></div>
+
+<div id="hud">
+  <div class="cell" id="stateCell"><span id="stateTxt" class="st-lock">LOCK</span></div>
+  <div class="cell"><span class="k">|v| m/s</span><span id="vMag">0.000</span></div>
+  <div class="cell grow"><span class="k">position m</span><span id="posTxt">0.00&nbsp; 0.00&nbsp; 0.00</span></div>
+  <div class="cell"><span class="k">bias mm/s²</span><span id="biasTxt">— — —</span></div>
+  <div class="cell"><span class="k">Hz</span><span id="hzTxt">0</span></div>
+</div>
+
+<div id="drawer">
+  <div id="drawerTab">Controls</div>
+  <div class="row"><label>Gain</label><input type="range" id="gain" min="0.5" max="12" step="0.1" value="4"><output id="gainOut">4.0×</output></div>
+  <div class="row"><label>Deadband</label><input type="range" id="dead" min="0.02" max="0.60" step="0.01" value="0.15"><output id="deadOut">0.15</output></div>
+  <div class="row"><label>Rest hold</label><input type="range" id="hold" min="80" max="600" step="20" value="240"><output id="holdOut">240ms</output></div>
+  <div class="toggle"><span class="lbl">Magnetometer (yaw anchor)</span><div class="sw" id="magSw"></div></div>
+  <div id="magNote"></div>
+  <div class="toggle"><span class="lbl">Trail</span><div class="sw on" id="trailSw"></div></div>
+  <div class="btnrow">
+    <button id="zeroBtn">Re-zero bias</button>
+    <button id="centerBtn">Center point</button>
+    <button id="clearBtn">Clear trail</button>
+  </div>
+</div>
+
+<div id="overlay">
+  <h1>IMU POINT <span>CONTROLLER</span></h1>
+  <p>Hold the phone still to <b style="color:var(--lock)">LOCK</b>. Nudge it in any direction to push the point — each gesture integrates on its own, then drift resets to zero at rest.</p>
+  <p>Requires HTTPS and motion sensors (open on a phone).</p>
+  <button id="startBtn">Enable motion sensors</button>
+  <div id="err"></div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(() => {
+"use strict";
+
+/* ================= three.js scene ================= */
+const container = document.getElementById("scene");
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio,2));
+renderer.setSize(innerWidth,innerHeight);
+container.appendChild(renderer.domElement);
+
+const sceneG = new THREE.Scene();
+sceneG.background = new THREE.Color(0x0b0e14);
+sceneG.fog = new THREE.Fog(0x0b0e14, 6, 16);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 60);
+camera.position.set(2.6, 2.2, 3.4);
+camera.lookAt(0, 0.6, 0);
+
+const grid = new THREE.GridHelper(10, 20, 0x2a3a50, 0x1a2635);
+sceneG.add(grid);
+const axes = new THREE.AxesHelper(0.9);
+axes.material.transparent = true; axes.material.opacity = 0.85;
+sceneG.add(axes);
+
+sceneG.add(new THREE.AmbientLight(0x8fa3c0, 0.7));
+const key = new THREE.DirectionalLight(0xffffff, 0.9);
+key.position.set(3,5,2); sceneG.add(key);
+
+/* the point */
+const dotMat = new THREE.MeshStandardMaterial({color:0x8fd3ff, emissive:0x1c4b66, roughness:0.35});
+const dot = new THREE.Mesh(new THREE.SphereGeometry(0.06, 24, 18), dotMat);
+dot.position.set(0, 0.6, 0);
+sceneG.add(dot);
+
+/* drop line + floor shadow disc — depth perception */
+const dropGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
+const dropLine = new THREE.Line(dropGeo, new THREE.LineBasicMaterial({color:0x3a557a, transparent:true, opacity:0.7}));
+sceneG.add(dropLine);
+const disc = new THREE.Mesh(new THREE.CircleGeometry(0.05, 24),
+  new THREE.MeshBasicMaterial({color:0x3a557a, transparent:true, opacity:0.55, side:THREE.DoubleSide}));
+disc.rotation.x = -Math.PI/2; disc.position.y = 0.001;
+sceneG.add(disc);
+
+/* trail */
+const MAX_TRAIL = 1200;
+const trailPos = new Float32Array(MAX_TRAIL*3);
+let trailLen = 0;
+const trailGeo = new THREE.BufferGeometry();
+trailGeo.setAttribute("position", new THREE.BufferAttribute(trailPos, 3));
+trailGeo.setDrawRange(0, 0);
+const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({color:0xffa02e, transparent:true, opacity:0.8}));
+sceneG.add(trail);
+let trailOn = true;
+
+function pushTrail(p){
+  if (trailLen < MAX_TRAIL){
+    trailPos.set([p.x,p.y,p.z], trailLen*3); trailLen++;
+  } else {
+    trailPos.copyWithin(0, 3); trailPos.set([p.x,p.y,p.z], (MAX_TRAIL-1)*3);
+  }
+  trailGeo.attributes.position.needsUpdate = true;
+  trailGeo.setDrawRange(0, trailLen);
+}
+function clearTrail(){ trailLen = 0; trailGeo.setDrawRange(0,0); }
+
+addEventListener("resize", () => {
+  camera.aspect = innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* one-finger orbit (so the view itself never fights the sensor input badly) */
+let orbiting=false, px=0, py=0, yaw=0.66, pitch=0.55, dist=4.6;
+function camUpdate(){
+  pitch = Math.max(0.08, Math.min(1.35, pitch));
+  camera.position.set(
+    dist*Math.cos(pitch)*Math.sin(yaw),
+    0.6 + dist*Math.sin(pitch),
+    dist*Math.cos(pitch)*Math.cos(yaw));
+  camera.lookAt(0, 0.6, 0);
+}
+camUpdate();
+renderer.domElement.addEventListener("touchstart", e=>{ if(e.touches.length===1){orbiting=true;px=e.touches[0].clientX;py=e.touches[0].clientY;} }, {passive:true});
+renderer.domElement.addEventListener("touchmove", e=>{
+  if(!orbiting||e.touches.length!==1) return;
+  yaw   -= (e.touches[0].clientX-px)*0.006;
+  pitch += (e.touches[0].clientY-py)*0.006;
+  px=e.touches[0].clientX; py=e.touches[0].clientY; camUpdate();
+}, {passive:true});
+renderer.domElement.addEventListener("touchend", ()=>orbiting=false);
+renderer.domElement.addEventListener("mousedown", e=>{orbiting=true;px=e.clientX;py=e.clientY;});
+addEventListener("mousemove", e=>{ if(!orbiting)return;
+  yaw-=(e.clientX-px)*0.006; pitch+=(e.clientY-py)*0.006; px=e.clientX;py=e.clientY; camUpdate(); });
+addEventListener("mouseup", ()=>orbiting=false);
+
+/* ================= orientation (OS-fused) ================= */
+const q = new THREE.Quaternion();          // device -> world
+const _z = new THREE.Vector3(0,0,1);
+const _e = new THREE.Euler();
+const _q0 = new THREE.Quaternion();
+const _q1 = new THREE.Quaternion(-Math.sqrt(0.5), 0, 0, Math.sqrt(0.5));
+let haveOrient = false;
+
+function setQuat(alpha, beta, gamma){
+  const orient = (screen.orientation && screen.orientation.angle || 0) * Math.PI/180;
+  _e.set(beta*Math.PI/180, alpha*Math.PI/180, -gamma*Math.PI/180, "YXZ");
+  q.setFromEuler(_e);
+  q.multiply(_q1);
+  q.multiply(_q0.setFromAxisAngle(_z, -orient));
+  haveOrient = true;
+}
+
+let useMag = false, absSupported = false;
+function onOrientRel(e){ if(!useMag && e.alpha!==null) setQuat(e.alpha, e.beta, e.gamma); }
+function onOrientAbs(e){ if(useMag  && e.alpha!==null){ absSupported = true; setQuat(e.alpha, e.beta, e.gamma); } }
+
+/* ================= inertial pipeline ================= */
+const S = {
+  state: "LOCK",               // LOCK | TRACK
+  v: new THREE.Vector3(),
+  p: new THREE.Vector3(0, 0.6, 0),
+  bias: new THREE.Vector3(),   // device-frame accel bias
+  lastT: 0,
+  quietSince: 0,
+  gestureT: 0,
+  hz: 0, hzCount: 0, hzT: 0,
+  gain: 4.0,
+  dead: 0.15,                  // m/s² deadband
+  holdMs: 240,                 // stillness time before LOCK
+  gyroThresh: 12,              // deg/s
+};
+const aDev = new THREE.Vector3();
+const aWorld = new THREE.Vector3();
+const BOUND = 4.5;             // keep the point inside the visible volume
+
+function onMotion(e){
+  const now = performance.now();
+  if (!S.lastT){ S.lastT = now; return; }
+  let dt = (now - S.lastT)/1000;
+  S.lastT = now;
+  if (dt <= 0 || dt > 0.2) return;
+
+  /* sample rate readout */
+  S.hzCount++;
+  if (now - S.hzT > 1000){ S.hz = S.hzCount; S.hzCount = 0; S.hzT = now; }
+
+  const a = e.acceleration;
+  if (!a || a.x === null){ ui.err("This browser gives no gravity-free acceleration."); return; }
+  const rr = e.rotationRate || {alpha:0,beta:0,gamma:0};
+  const gyroMag = Math.hypot(rr.alpha||0, rr.beta||0, rr.gamma||0);
+
+  aDev.set(a.x, a.y, a.z).sub(S.bias);
+  const aMag = aDev.length();
+
+  const quiet = aMag < S.dead && gyroMag < S.gyroThresh;
+
+  if (S.state === "LOCK"){
+    if (quiet){
+      /* recalibrate bias at the current resting pose (slow EMA on raw signal) */
+      S.bias.x += 0.02*(a.x - S.bias.x);
+      S.bias.y += 0.02*(a.y - S.bias.y);
+      S.bias.z += 0.02*(a.z - S.bias.z);
+    } else if (aMag > S.dead*1.6){        /* hysteresis: leaving deadband starts a gesture */
+      S.state = "TRACK";
+      S.gestureT = 0;
+      S.v.set(0,0,0);
+    }
+  }
+
+  if (S.state === "TRACK"){
+    S.gestureT += dt;
+    if (quiet){
+      if (!S.quietSince) S.quietSince = now;
+      if (now - S.quietSince > S.holdMs){   /* ZUPT: gesture over */
+        S.state = "LOCK";
+        S.v.set(0,0,0);
+        S.quietSince = 0;
+        return;
+      }
+    } else S.quietSince = 0;
+
+    if (haveOrient){
+      aWorld.copy(aDev).applyQuaternion(q);
+    } else {
+      aWorld.set(aDev.x, aDev.z, -aDev.y);  /* crude fallback: phone flat, screen up */
+    }
+
+    /* integrate: a -> v (with leak) -> p (with gain) */
+    S.v.addScaledVector(aWorld, dt);
+    S.v.multiplyScalar(Math.exp(-0.9*dt));            /* velocity leak tames residuals */
+    if (S.gestureT > 2.5) S.v.multiplyScalar(0.94);    /* long-gesture safety brake */
+    S.p.addScaledVector(S.v, dt * S.gain);
+
+    S.p.x = Math.max(-BOUND, Math.min(BOUND, S.p.x));
+    S.p.y = Math.max(0.05,  Math.min(BOUND, S.p.y));
+    S.p.z = Math.max(-BOUND, Math.min(BOUND, S.p.z));
+    if (trailOn) pushTrail(S.p);
+  }
+}
+
+/* ================= UI ================= */
+const $ = id => document.getElementById(id);
+const ui = {
+  err(msg){ $("err").textContent = msg; },
+  update(){
+    const lock = S.state === "LOCK";
+    $("stateTxt").textContent = lock ? "LOCK" : "TRACK";
+    $("stateTxt").className = lock ? "st-lock" : "st-track";
+    $("stateCell").classList.toggle("tracking", !lock);
+    $("vMag").textContent = S.v.length().toFixed(3);
+    $("posTxt").innerHTML = [S.p.x,S.p.y,S.p.z].map(n=>n.toFixed(2)).join("&nbsp; ");
+    $("biasTxt").textContent = [S.bias.x,S.bias.y,S.bias.z].map(n=>(n*1000).toFixed(0)).join(" ");
+    $("hzTxt").textContent = S.hz;
+    dotMat.color.setHex(lock ? 0x8fd3ff : 0xffa02e);
+    dotMat.emissive.setHex(lock ? 0x1c4b66 : 0x663c10);
+  }
+};
+
+$("drawerTab").addEventListener("click", ()=> $("drawer").classList.toggle("open"));
+$("gain").addEventListener("input", e=>{ S.gain=+e.target.value; $("gainOut").textContent=S.gain.toFixed(1)+"×"; });
+$("dead").addEventListener("input", e=>{ S.dead=+e.target.value; $("deadOut").textContent=S.dead.toFixed(2); });
+$("hold").addEventListener("input", e=>{ S.holdMs=+e.target.value; $("holdOut").textContent=S.holdMs+"ms"; });
+$("trailSw").addEventListener("click", e=>{ trailOn=!trailOn; e.currentTarget.classList.toggle("on",trailOn); });
+$("magSw").addEventListener("click", e=>{
+  useMag = !useMag;
+  e.currentTarget.classList.toggle("on", useMag);
+  $("magNote").textContent = useMag
+    ? (("ondeviceorientationabsolute" in window) ? "Compass-anchored yaw (drifts near metal)." 
+       : "Absolute orientation not exposed by this browser — using relative.")
+    : "";
+});
+$("zeroBtn").addEventListener("click", ()=>{ S.bias.set(0,0,0); });
+$("centerBtn").addEventListener("click", ()=>{ S.p.set(0,0.6,0); S.v.set(0,0,0); S.state="LOCK"; });
+$("clearBtn").addEventListener("click", clearTrail);
+
+/* ================= permissions & start ================= */
+async function start(){
+  try{
+    if (typeof DeviceMotionEvent !== "undefined" && typeof DeviceMotionEvent.requestPermission === "function"){
+      const m = await DeviceMotionEvent.requestPermission();
+      if (m !== "granted") throw new Error("Motion permission denied.");
+    }
+    if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function"){
+      const o = await DeviceOrientationEvent.requestPermission();
+      if (o !== "granted") throw new Error("Orientation permission denied.");
+    }
+  }catch(err){ ui.err(err.message + " — needs HTTPS and a real page (not an embedded frame)."); return; }
+
+  addEventListener("devicemotion", onMotion);
+  addEventListener("deviceorientation", onOrientRel);
+  if ("ondeviceorientationabsolute" in window)
+    addEventListener("deviceorientationabsolute", onOrientAbs);
+
+  $("overlay").style.display = "none";
+
+  setTimeout(()=>{
+    if (!S.hzCount && !S.hz)
+      ui.err("No motion events arriving — open this file on a phone over HTTPS.");
+  }, 1500);
+}
+$("startBtn").addEventListener("click", start);
+
+/* ================= render loop ================= */
+function tick(){
+  requestAnimationFrame(tick);
+  dot.position.copy(S.p);
+  disc.position.set(S.p.x, 0.001, S.p.z);
+  const arr = dropGeo.attributes.position.array;
+  arr[0]=S.p.x; arr[1]=0;     arr[2]=S.p.z;
+  arr[3]=S.p.x; arr[4]=S.p.y; arr[5]=S.p.z;
+  dropGeo.attributes.position.needsUpdate = true;
+  ui.update();
+  renderer.render(sceneG, camera);
+}
+tick();
+})();
+</script>
+</body>
+</html>
